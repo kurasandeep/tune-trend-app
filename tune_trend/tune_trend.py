@@ -11,12 +11,15 @@ from sklearn.metrics import r2_score
 # Spotify API Library and its specific exception
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
-from spotipy.exceptions import SpotifyException # Import the specific Spotify exception
+from spotipy.exceptions import SpotifyException 
 import time as time_module 
 
 # --- 0. CONFIGURATION AND CONSTANTS ---
 
-SPOTIFY_PLAYLIST_ID = '37i9dQZEVXbJvfa0FSMvLq' 
+# Spotify Chart Playlist ID (Changed to RapCaviar: one of Spotify's largest and most stable public playlists)
+# Old ID (Today's Top Hits): '37i9dQZEVXbJvfa0FSMvLq'
+# New ID (RapCaviar): '37i9dQZF1DX0XUfTFmZEEK'
+SPOTIFY_PLAYLIST_ID = '37i9dQZF1DX0XUfTFmZEEK' 
 MAX_RETRIES = 3
 MAX_POPULARITY = 100
 
@@ -78,17 +81,17 @@ def get_spotify_chart_data(_sp, start_date, end_date, num_days, num_tracks): # P
     
     # 1. Fetch Top Tracks and Features TODAY
     try:
-        # **ROBUST API CALL ADDED HERE**
+        # Robust API call: using the confirmed stable ID
         results = _sp.playlist_tracks(SPOTIFY_PLAYLIST_ID, limit=num_tracks) 
     except SpotifyException as e:
         # Handle the 404/Resource Not Found error specifically
-        st.error(f"Error fetching playlist tracks: {e}. Please verify the SPOTIFY_PLAYLIST_ID is correct and public.")
+        st.error(f"Error fetching playlist tracks: {e}. Please ensure the SPOTIFY_PLAYLIST_ID is public and correct.")
         return pd.DataFrame()
     except Exception as e:
         st.error(f"An unexpected error occurred during Spotify API call: {e}")
         return pd.DataFrame()
 
-    # Continue with processing fetched data (same logic as before)
+    # Continue with processing fetched data
     for item in results['items']:
         track = item['track']
         if track and track['id'] and track['id'] not in track_ids:
@@ -114,7 +117,7 @@ def get_spotify_chart_data(_sp, start_date, end_date, num_days, num_tracks): # P
                 })
 
     if not track_data:
-        st.warning("No track data found.")
+        st.warning("No track data found. API credentials might be invalid or the playlist is empty.")
         return pd.DataFrame()
 
     # 2. Simulate Historical Daily Popularity using fixed features
@@ -255,7 +258,7 @@ def generate_forecast(_model, data_df, days=30):
 
     # Feature Engineering for Forecast
     forecast_df['month'] = forecast_df['date'].apply(lambda x: x.month)
-    forecast_df['is_weekend'] = forecast_df['date'].apply(lambda x: x.weekday() >= 5) # Boolean used
+    forecast_df['is_weekend'] = forecast_df['date'].apply(lambda x: x.weekday() >= 5) 
     forecast_df['month_sin'] = np.sin(2 * np.pi * forecast_df['month'] / 12)
     forecast_df['month_cos'] = np.cos(2 * np.pi * forecast_df['month'] / 12)
 
@@ -309,8 +312,8 @@ if sp_client is not None:
     master_df = get_integrated_data(sp_client, lat, lon, elevation, location_name, START_DATE, END_DATE) 
 
     if master_df.empty:
-        # st.error is handled within get_integrated_data/get_spotify_chart_data
-        st.info("The application could not retrieve necessary data to run the model. Please check Spotify credentials/Playlist ID.")
+        # If master_df is empty, it means Spotify data retrieval failed (handled in previous functions)
+        st.error("Model training aborted. The application could not retrieve or process sufficient Spotify/Weather data. Check your logs and the Playlist ID.")
     else:
         model, validation_df = train_model(master_df)
         forecast_df = generate_forecast(model, master_df) 
