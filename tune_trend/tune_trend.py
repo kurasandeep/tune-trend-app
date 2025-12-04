@@ -8,15 +8,15 @@ from datetime import datetime, timedelta, time, date
 from meteostat import Point, Daily
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import r2_score
-# Spotify API Library
+# Spotify API Library and its specific exception
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials
+from spotipy.exceptions import SpotifyException # Import the specific Spotify exception
 import time as time_module 
 
 # --- 0. CONFIGURATION AND CONSTANTS ---
 
-# Spotify Chart Playlist ID (Example: Global Top 50)
-SPOTIFY_PLAYLIST_ID = '37i9dQZEVXbMDoHDwVN2tF' 
+SPOTIFY_PLAYLIST_ID = '37i9dQZEVXbJvfa0FSMvLq' 
 MAX_RETRIES = 3
 MAX_POPULARITY = 100
 
@@ -24,6 +24,7 @@ MAX_POPULARITY = 100
 CITY_MAP = {
     "New York": (40.71, -74.01, 10, "New York City"),
     "London": (51.5, -0.12, 25, "London, UK"),
+    "Sydney": (33.86, 151.2, 39, "Sydney, Australia"),
     "Tokyo": (35.68, 139.75, 40, "Tokyo, Japan"),
     "Miami": (25.76, -80.19, 2, "Miami, USA"),
     "Berlin": (52.52, 13.4, 34, "Berlin, Germany"),
@@ -54,6 +55,9 @@ def authenticate_spotify():
     except KeyError:
         st.error("Spotify credentials not found in Streamlit secrets. Please configure .streamlit/secrets.toml.")
         return None
+    except st.errors.UnhashableTypeNameError:
+        st.error("Error reading Spotify secrets. Ensure your keys are correctly formatted in secrets.toml.")
+        return None
 
     client_credentials_manager = SpotifyClientCredentials(client_id=cid, client_secret=secret)
     return spotipy.Spotify(client_credentials_manager=client_credentials_manager)
@@ -61,12 +65,12 @@ def authenticate_spotify():
 # --- 1. DATA ACQUISITION: SPOTIFY (Real-Time Data Fetching) ---
 
 @st.cache_data(show_spinner="1. Fetching Spotify and Weather Data...")
-def get_spotify_chart_data(_sp, start_date, end_date, num_days, num_tracks):
+def get_spotify_chart_data(_sp, start_date, end_date, num_days, num_tracks): # Parameter renamed to _sp for caching stability
     """
     Fetches daily top tracks' audio features and simulates a daily popularity score
     based on the real tracks' features.
     """
-    if _sp is None: # FIX: Use _sp here
+    if _sp is None: 
         return pd.DataFrame()
 
     track_data = []
@@ -74,21 +78,27 @@ def get_spotify_chart_data(_sp, start_date, end_date, num_days, num_tracks):
     
     # 1. Fetch Top Tracks and Features TODAY
     try:
-        results = _sp.playlist_tracks(SPOTIFY_PLAYLIST_ID, limit=num_tracks) # FIX: Use _sp here
+        # **ROBUST API CALL ADDED HERE**
+        results = _sp.playlist_tracks(SPOTIFY_PLAYLIST_ID, limit=num_tracks) 
+    except SpotifyException as e:
+        # Handle the 404/Resource Not Found error specifically
+        st.error(f"Error fetching playlist tracks: {e}. Please verify the SPOTIFY_PLAYLIST_ID is correct and public.")
+        return pd.DataFrame()
     except Exception as e:
-        st.error(f"Error fetching playlist tracks: {e}")
+        st.error(f"An unexpected error occurred during Spotify API call: {e}")
         return pd.DataFrame()
 
+    # Continue with processing fetched data (same logic as before)
     for item in results['items']:
         track = item['track']
-        if track and track['id'] not in track_ids:
+        if track and track['id'] and track['id'] not in track_ids:
             track_ids.append(track['id'])
             
             base_pop = track.get('popularity', 50) 
             
             # Fetch audio features for the track
             try:
-                features = _sp.audio_features(track['id'])[0] # FIX: Use _sp here
+                features = _sp.audio_features(track['id'])[0] 
             except Exception:
                 features = None
             
@@ -142,13 +152,13 @@ def get_spotify_chart_data(_sp, start_date, end_date, num_days, num_tracks):
 # --- 2. DATA ACQUISITION: WEATHER & INTEGRATION ---
 
 @st.cache_data(show_spinner="1. Fetching Spotify and Weather Data...")
-def get_integrated_data(_sp, lat, lon, elevation, location_name, start_date, end_date): # FIX: Renamed sp to _sp
+def get_integrated_data(_sp, lat, lon, elevation, location_name, start_date, end_date): # Parameter renamed to _sp for caching stability
     """Acquires, simulates, and integrates all project data."""
     
     # Internal function to fetch weather data from Meteostat
     def get_meteostat_weather_data(lat, lon, start, end, location_name, elevation):
         
-        # FIX: Convert input datetime.date objects to datetime.datetime 
+        # Convert input datetime.date objects to datetime.datetime 
         start_dt = datetime.combine(start, time(0, 0))
         end_dt = datetime.combine(end, time(0, 0))
         
@@ -166,9 +176,10 @@ def get_integrated_data(_sp, lat, lon, elevation, location_name, start_date, end
     days_to_analyze = (end_date - start_date).days + 1
     
     # 1. Get Spotify Data using the Spotipy client
-    music_df = get_spotify_chart_data(_sp, start_date, end_date, days_to_analyze, NUM_TRACKS) # FIX: Pass _sp
+    music_df = get_spotify_chart_data(_sp, start_date, end_date, days_to_analyze, NUM_TRACKS) 
     
     if music_df.empty:
+        st.warning("Spotify data is empty. Skipping model training and forecast.")
         return pd.DataFrame()
 
     # 2. Get Meteostat Weather Data (Dynamic Location)
@@ -244,7 +255,7 @@ def generate_forecast(_model, data_df, days=30):
 
     # Feature Engineering for Forecast
     forecast_df['month'] = forecast_df['date'].apply(lambda x: x.month)
-    forecast_df['is_weekend'] = forecast_df['date'].apply(lambda x: 1 if x.weekday() >= 5 else 0)
+    forecast_df['is_weekend'] = forecast_df['date'].apply(lambda x: x.weekday() >= 5) # Boolean used
     forecast_df['month_sin'] = np.sin(2 * np.pi * forecast_df['month'] / 12)
     forecast_df['month_cos'] = np.cos(2 * np.pi * forecast_df['month'] / 12)
 
@@ -286,7 +297,7 @@ lat, lon, elevation, location_name = CITY_MAP[selected_city]
 
 st.sidebar.markdown(f"""
     ---
-    **Spotify Data Source:** Top {NUM_TRACKS} tracks from Global Top 50 (ID: {SPOTIFY_PLAYLIST_ID})  
+    **Spotify Data Source:** Top {NUM_TRACKS} tracks from {SPOTIFY_PLAYLIST_ID}  
     **Weather Data Source:** {location_name}  
     **Training Period:** {DAYS_TO_ANALYZE} Days ({START_DATE} to {END_DATE})
 """)
@@ -295,11 +306,11 @@ st.sidebar.info("The **Tune Trend** model predicts future song popularity by cor
 
 if sp_client is not None:
     # Execution Order: Load Data -> Train Model -> Generate Forecast
-    # NOTE: sp_client is passed as the first argument, corresponding to the ignored _sp parameter
     master_df = get_integrated_data(sp_client, lat, lon, elevation, location_name, START_DATE, END_DATE) 
 
     if master_df.empty:
-        st.error("Cannot proceed. Data integration failed or returned empty results. Check your Spotify API keys or internet connection.")
+        # st.error is handled within get_integrated_data/get_spotify_chart_data
+        st.info("The application could not retrieve necessary data to run the model. Please check Spotify credentials/Playlist ID.")
     else:
         model, validation_df = train_model(master_df)
         forecast_df = generate_forecast(model, master_df) 
